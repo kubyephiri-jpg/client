@@ -4,27 +4,11 @@ import { motion, PanInfo, AnimatePresence, useMotionValue, useSpring, useTransfo
 import { X, Plus, Calendar, User, Briefcase, ChevronDown, RefreshCw, Users } from 'lucide-react';
 import { useGlobalCart } from '../contexts/GlobalCartContext';
 import { apiPost } from '../config/api';
-
-// Backend response type for ride options
-interface BackendRideOption {
-  category: string;
-  title: string;
-  enabled: boolean;
-  eta: number;
-  price: number;
-  seats: number;
-  image: string;
-}
-
-// Vehicle icons mapping for courier/delivery vehicles
-const DELIVERY_ICONS: Record<string, { image: string; color: string }> = {
-  'bicycle': { image: '/cars/bicycle.png', color: 'bg-[#5B2EFF]/10' },
-  'motorbike': { image: '/cars/motorbike.png', color: 'bg-[#5B2EFF]/10' },
-  'car': { image: '/cars/economy.png', color: 'bg-[#5B2EFF]/10' },
-  'bakkie': { image: '/cars/bakkie.png', color: 'bg-[#5B2EFF]/10' },
-  'van': { image: '/cars/van.png', color: 'bg-[#5B2EFF]/10' },
-  'truck': { image: '/cars/truck.png', color: 'bg-[#5B2EFF]/10' },
-};
+import { 
+  BackendRideOption, 
+  getVehicleConfig, 
+  filterOptionsByService 
+} from '../config/vehicleConfig';
 
 type FilterTab = 'standard' | 'faster' | 'cheaper';
 
@@ -172,10 +156,13 @@ export function FoodDelivery() {
       const options = response.data || response || [];
       const optionsArray = Array.isArray(options) ? options : [];
       
-      setDeliveryOptions(optionsArray);
+      // Filter options by service type before setting state
+      const filteredOptions = filterOptionsByService(optionsArray, serviceType);
+      
+      setDeliveryOptions(filteredOptions);
       
       // Auto-select first enabled vehicle
-      const firstEnabled = optionsArray.find((x: BackendRideOption) => x.enabled);
+      const firstEnabled = filteredOptions.find((x: BackendRideOption) => x.enabled);
       if (firstEnabled) {
         setSelectedOption(firstEnabled);
       }
@@ -346,9 +333,9 @@ export function FoodDelivery() {
     return `${mainAddress}${stopsText}`;
   };
 
-  // Get icon config for a delivery option
+  // Get icon config for a delivery option using unified config
   const getIconConfig = (categoryKey: string) => {
-    return DELIVERY_ICONS[categoryKey.toLowerCase()] || DELIVERY_ICONS['car'] || { image: '/cars/economy.png', color: 'bg-[#5B2EFF]/10' };
+    return getVehicleConfig(categoryKey);
   };
 
   // Format ETA

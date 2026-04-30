@@ -5,30 +5,11 @@ import { X, Plus, Calendar, Users, User, Briefcase, ChevronDown, RefreshCw } fro
 import { PromoDetailsPanel } from '../components/PromoDetailsPanel';
 import { useRideContext } from '../contexts/RideContext';
 import { apiPost } from '../config/api';
-
-// Car icons mapping - use ONLY local images, NO emojis
-const RIDE_ICONS: Record<string, { image: string; color: string }> = {
-  'ride_economy': { image: '/cars/economy.png', color: 'bg-[#5B2EFF]/10' },
-  'ride_comfort': { image: '/cars/comfort.png', color: 'bg-gray-100' },
-  'ride_xl': { image: '/cars/xl.png', color: 'bg-blue-100' },
-  'ride_women': { image: '/cars/xxl.png', color: 'bg-pink-100' },
-  'aletwende': { image: '/cars/aletwende.png', color: 'bg-yellow-100' },
-  'economy': { image: '/cars/economy.png', color: 'bg-[#5B2EFF]/10' },
-  'comfort': { image: '/cars/comfort.png', color: 'bg-gray-100' },
-  'xl': { image: '/cars/xl.png', color: 'bg-blue-100' },
-  'women': { image: '/cars/xxl.png', color: 'bg-pink-100' },
-};
-
-// Backend response type
-interface BackendRideOption {
-  category: string;
-  title: string;
-  enabled: boolean;
-  eta: number;
-  price: number;
-  seats: number;
-  image: string;
-}
+import { 
+  BackendRideOption, 
+  getVehicleConfig, 
+  filterOptionsByService 
+} from '../config/vehicleConfig';
 
 interface SelectRideProps {
   destination: string;
@@ -166,10 +147,13 @@ export const SelectRide: React.FC<SelectRideProps> = ({
       // Handle array response directly or wrapped in data property
       const optionsArray = Array.isArray(options) ? options : [];
       
-      setRideOptions(optionsArray);
+      // Filter options by service type before setting state
+      const filteredOptions = filterOptionsByService(optionsArray, serviceType);
+      
+      setRideOptions(filteredOptions);
       
       // Auto-select first enabled vehicle
-      const firstEnabled = optionsArray.find((x: BackendRideOption) => x.enabled);
+      const firstEnabled = filteredOptions.find((x: BackendRideOption) => x.enabled);
       if (firstEnabled) {
         setSelectedRide(firstEnabled);
       }
@@ -326,9 +310,9 @@ export const SelectRide: React.FC<SelectRideProps> = ({
     }
   };
 
-  // Get icon config for a ride option
+  // Get icon config for a ride option using unified config
   const getRideIconConfig = (category: string) => {
-    return RIDE_ICONS[category] || RIDE_ICONS['economy'] || { image: '/cars/economy.png', color: 'bg-gray-100' };
+    return getVehicleConfig(category);
   };
 
   // Format ETA - backend already returns minutes
