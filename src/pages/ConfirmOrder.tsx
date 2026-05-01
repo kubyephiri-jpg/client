@@ -5,9 +5,12 @@ import { MapBackground } from '../components/MapBackground';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useRideContext } from '../contexts/RideContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { database, auth, db } from '../config/firebase';
-import { ref, push, set } from 'firebase/database';
-import { collection, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
+import { auth } from '../config/firebase';
+import { 
+  createOrder, 
+  ServiceType,
+  CreateOrderInput 
+} from '../services/orderService';
 
 interface UserLocation {
   lat: number | null;
@@ -109,182 +112,90 @@ export const ConfirmOrder: React.FC<ConfirmOrderProps> = ({
     return '';
   };
 
-  const buildServiceRequest = () => {
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
-      throw new Error('User must be authenticated to request a service');
-    }
-
-    return {
-      type: serviceType,
-      vehicleClass: vehicle?.name || '',
-      serviceMeta: {
-        [getExtraSelectionLabel().toLowerCase().replace(' ', '_')]: extraSelection || ''
-      },
-      pickupAddress: pickupAddress || '',
-      destinationAddress: destinationAddress || '',
-      stops: stops || [],
-      status: 'pending',
-      timestamp: Date.now(),
-      userId: currentUser.uid,
-      userName: currentUser.displayName || profile?.name || 'Unknown User',
-      userEmail: currentUser.email || profile?.email || '',
-      pricing: {
-        basePrice: vehicle?.price || 0,
-        currency: 'ZAR'
-      }
-    };
-  };
-
-  const confirmServiceRequest = async () => {
-    try {
-      const serviceRequest = buildServiceRequest();
-      const serviceRequestsRef = ref(database, 'serviceRequests');
-      const newServiceRequestRef = push(serviceRequestsRef);
-      const serviceRequestId = newServiceRequestRef.key!;
-
-      await set(newServiceRequestRef, serviceRequest);
-
-      localStorage.setItem('currentServiceRequestId', serviceRequestId);
-      localStorage.setItem('currentOrderType', 'service');
-
-      navigate('/waiting-for-driver', {
-        state: {
-          orderType: 'service',
-          requestId: serviceRequestId,
-          orderData: serviceRequest
-        }
-      });
-    } catch (error) {
-      console.error('Failed to create service request:', error);
-      throw error;
-    }
-  };
-
-  const createDeliveryOrder = async () => {
-    const currentUser = auth.currentUser;
-
-    const cleanItems = (orderData.items || []).map((item: any) => ({
-      id: item.id || '',
-      name: item.name || '',
-      price: item.price || 0,
-      image: item.image || '',
-      category: type || item.category || 'food',
-    }));
-
-    const deliveryOrder = {
-      type: type || 'food',
-      storeId: orderData.storeId || '',
-      storeName: orderData.storeName || '',
-      storeAddress: orderData.storeAddress || '',
-      storeLocation: orderData.storeLocation || { lat: null, lng: null },
-      userId: currentUser?.uid || 'guest',
-      userName: currentUser?.displayName || profile?.name || 'Guest User',
-      userEmail: currentUser?.email || profile?.email || '',
-      userLocation: {
-        lat: userLocation.lat,
-        lng: userLocation.lng,
-      },
-      destinationAddress: orderData.destinationAddress || '',
-      items: cleanItems,
-      subtotal: orderData.subtotal || orderData.foodSubtotal || 0,
-      deliveryFee: orderData.deliveryFee || 0,
-      total: orderData.totalPrice || 0,
-      deliveryMode: orderData.deliveryMode ? {
-        id: orderData.deliveryMode.id || '',
-        fee: orderData.deliveryMode.deliveryFee || orderData.deliveryFee || 0,
-        estimatedTime: parseInt(orderData.deliveryMode.time) || 20,
-      } : null,
-      status: 'pending',
-      driverId: null,
-      driverStatus: 'waiting',
-      prepTime: 15,
-      createdAt: serverTimestamp(),
-    };
-
-    const ordersRef = collection(db, 'orders');
-    const docRef = await addDoc(ordersRef, deliveryOrder);
-    const orderId = docRef.id;
-
-    localStorage.setItem('currentDeliveryOrderId', orderId);
-    localStorage.setItem('currentOrderType', 'delivery');
-
-    navigate('/order-tracking', {
-      state: {
-        orderId: orderId,
-        orderData: {
-          ...deliveryOrder,
-          id: orderId,
-        }
-      }
-    });
-
-    return orderId;
-  };
-
   /**
-   * Create ride request in Firestore (NOT Realtime Database)
-   * Creates BOTH rideRequests and rides documents
+   * Unified order creation for all service types
+   * Uses the new orders collection via orderService
    */
-  const createRideInFirestore = async () => {
+  const createUnifiedOrder = async (): Promise<string> => {
     const currentUser = auth.currentUser;
     const userId = currentUser?.uid || profile?.id || 'guest';
-    const userName = currentUser?.displayName || profile?.name || 'Guest User';
-    const userEmail = currentUser?.email || profile?.email || '';
 
-    // Common data for both documents
-    const commonData = {
+    // Determine service type
+    let svcType: ServiceType = 'ride';
+    if (serviceType === 'package') svcType = 'package';
+    else if (serviceType === 'towing') svcType = 'towing';
+    else if (serviceType === 'truck') svcType = 'truck';
+    else if (isDelivery || isFood) svcType = (type as ServiceType) || 'food';
+
+    // Build order input
+    const orderInput: CreateOrderInput = {
       userId,
-      userName,
-      userEmail,
-      pickupLocation: {
-        address: finalPickup,
-        latitude: pickupCoords?.lat || userLocation.lat,
-        longitude: pickupCoords?.lng || userLocation.lng
+      serviceType: svcType,
+      pickup: {
+        address: finalPickup || pickupAddress || '',
+        lat: pickupCoords?.lat || userLocation.lat || 0,
+        lng: pickupCoords?.lng || userLocation.lng || 0,
       },
-      destinationLocation: {
-        address: finalDestination,
-        latitude: destinationCoords?.lat || null,
-        longitude: destinationCoords?.lng || null
+      dropoff: {
+        address: finalDestination || destinationAddress || '',
+        lat: destinationCoords?.lat || 0,
+        lng: destinationCoords?.lng || 0,
       },
-      stops: finalStops || [],
-      pricingId: rideData.pricingId,
-      service: 'ride',
-      vehicleCategory: rideData.vehicleCategory,
-      seats: rideData.seats,
-      estimatedPrice: rideData.estimatedPrice,
-      originalPrice: rideData.originalPrice,
-      rideName: rideData.name,
-      eta: rideData.eta
+      stops: (finalStops || []).map((stop: string) => ({
+        address: stop,
+        lat: 0,
+        lng: 0,
+      })),
+      vehicleCategory: isRide ? rideData.vehicleCategory : (vehicle?.id || vehicle?.name || orderData.deliveryMode?.id || ''),
+      vehicleTitle: isRide ? rideData.name : (vehicle?.name || orderData.deliveryMode?.label || ''),
+      price: isRide ? rideData.estimatedPrice : (vehicle?.price || orderData.totalPrice || 0),
+      currency: 'ZAR',
+      estimatedDuration: isRide 
+        ? parseInt(rideData.eta?.replace(' min', '') || '10') 
+        : (parseInt(orderData.deliveryMode?.time) || vehicle?.eta || 20),
+      paymentMethod: 'cash',
     };
 
-    // Create rideRequests document (for driver matching by backend)
-    const rideRequestsRef = collection(db, 'rideRequests');
-    const rideRequestDoc = await addDoc(rideRequestsRef, {
-      ...commonData,
-      status: 'pending',
-      createdAt: serverTimestamp()
-    });
-    const rideRequestId = rideRequestDoc.id;
+    // Add service-specific data
+    if (isDelivery || isFood) {
+      const cleanItems = (orderData.items || []).map((item: any) => ({
+        id: item.id || '',
+        name: item.name || '',
+        price: item.price || 0,
+        quantity: item.quantity || 1,
+        image: item.image || '',
+        storeName: orderData.storeName || '',
+        storeId: orderData.storeId || '',
+      }));
+      orderInput.cartItems = cleanItems;
+    }
 
-    // Create rides document (for client tracking)
-    const ridesRef = collection(db, 'rides');
-    const rideDoc = await addDoc(ridesRef, {
-      ...commonData,
-      rideRequestId,
-      status: 'pending',
-      driverId: null,
-      driverInfo: null,
-      createdAt: serverTimestamp()
-    });
-    const rideId = rideDoc.id;
+    if (serviceType === 'package') {
+      orderInput.packageDetails = {
+        description: extraSelection || '',
+        weight: extraSelection || '',
+        recipientName: '',
+        recipientPhone: '',
+      };
+    }
 
-    // Update rideRequest with the rideId for cross-reference
-    await setDoc(doc(db, 'rideRequests', rideRequestId), {
-      rideId
-    }, { merge: true });
+    if (serviceType === 'towing') {
+      orderInput.towingDetails = {
+        vehicleMake: extraSelection || '',
+        vehicleModel: '',
+        issue: '',
+      };
+    }
 
-    return rideId;
+    if (serviceType === 'truck') {
+      orderInput.truckDetails = {
+        loadDescription: extraSelection || '',
+      };
+    }
+
+    // Create the order
+    const orderId = await createOrder(orderInput);
+    return orderId;
   };
 
   const handleConfirmOrder = async () => {
@@ -298,76 +209,38 @@ export const ConfirmOrder: React.FC<ConfirmOrderProps> = ({
     setIsLoading(true);
 
     try {
-      if (isService) {
-        await confirmServiceRequest();
-      } else if (isDelivery) {
-        await createDeliveryOrder();
-      } else if (isFood) {
-        // Legacy food order support
-        const foodOrder = {
-          type: 'food',
-          deliveryMode: orderData.deliveryMode,
-          pickupAddress: orderData.pickupAddress,
-          destinationAddress: orderData.destinationAddress,
-          stops: orderData.stops || [],
-          items: orderData.items || [],
-          foodSubtotal: orderData.foodSubtotal,
-          deliveryFee: orderData.deliveryFee,
-          totalPrice: orderData.totalPrice,
-          status: 'pending',
-          timestamp: Date.now(),
-          userId: profile?.id || 'user123',
-          userName: profile?.name || 'Unknown User'
-        };
+      // Use unified order creation for all service types
+      const orderId = await createUnifiedOrder();
 
-        const foodOrdersRef = ref(database, 'foodOrders');
-        const newFoodOrderRef = push(foodOrdersRef);
-        const foodOrderId = newFoodOrderRef.key!;
+      // Store order ID and type in localStorage
+      localStorage.setItem('currentOrderId', orderId);
+      localStorage.setItem('currentOrderType', isService ? serviceType : (isDelivery || isFood ? (type || 'food') : 'ride'));
 
-        await set(newFoodOrderRef, foodOrder);
-
-        localStorage.setItem('currentFoodOrderId', foodOrderId);
-        localStorage.setItem('currentOrderType', 'food');
-
-        navigate('/waiting-for-driver', {
-          state: {
-            orderType: 'food',
-            requestId: foodOrderId,
-            orderData: foodOrder
-          }
-        });
-      } else if (isRide && rideData) {
-        // NEW: Create ride request in Firestore
-        const rideId = await createRideInFirestore();
-
-        localStorage.setItem('currentRideId', rideId);
-        localStorage.setItem('currentOrderType', 'ride');
-
-        onRideCreated(rideId);
-
-        navigate('/waiting-for-driver', {
-          state: {
-            orderType: 'ride',
-            requestId: rideId,
-            useFirestore: true, // Flag to tell WaitingForDriver to use Firestore
-            orderData: {
-              pickup: finalPickup,
-              destination: finalDestination,
-              stops: finalStops,
-              pricingId: rideData.pricingId,
-              rideName: rideData.name,
-              estimatedPrice: rideData.estimatedPrice,
-              vehicleCategory: rideData.vehicleCategory,
-              seats: rideData.seats,
-              eta: rideData.eta,
-              status: 'pending'
-            }
-          }
-        });
-      } else {
-        // Fallback for old flow without rideData
-        throw new Error('Ride data is missing. Please select a ride first.');
+      // Notify parent component
+      if (onRideCreated) {
+        onRideCreated(orderId);
       }
+
+      // Determine navigation destination
+      const isDeliveryType = isDelivery || isFood;
+      const navigateTo = isDeliveryType ? '/order-tracking' : '/waiting-for-driver';
+
+      navigate(navigateTo, {
+        state: {
+          orderId,
+          orderType: isService ? serviceType : (isDeliveryType ? (type || 'food') : 'ride'),
+          orderData: {
+            pickup: finalPickup || pickupAddress,
+            destination: finalDestination || destinationAddress,
+            stops: finalStops,
+            vehicleCategory: isRide ? rideData?.vehicleCategory : (vehicle?.id || vehicle?.name || orderData.deliveryMode?.id),
+            vehicleTitle: isRide ? rideData?.name : (vehicle?.name || orderData.deliveryMode?.label),
+            price: isRide ? rideData?.estimatedPrice : (vehicle?.price || orderData.totalPrice),
+            eta: isRide ? rideData?.eta : (vehicle?.eta || orderData.deliveryMode?.time),
+            status: 'pending'
+          }
+        }
+      });
     } catch (error) {
       console.error('Failed to create order:', error);
       alert('Failed to create order. Please try again.');
@@ -405,7 +278,7 @@ export const ConfirmOrder: React.FC<ConfirmOrderProps> = ({
         animate={{ scale: 1, opacity: 1 }}
         transition={{ delay: 0.3 }}
       >
-        <div className="bg-green-600 text-white px-6 py-3 rounded-full shadow-lg">
+        <div className="bg-[#5B2EFF] text-white px-6 py-3 rounded-full shadow-lg">
           <div className="text-center">
             <div className="text-2xl font-bold">
               {isRide ? rideData?.eta?.replace(' min', '') || '2' : '2'}
@@ -592,7 +465,7 @@ export const ConfirmOrder: React.FC<ConfirmOrderProps> = ({
                 <h3 className="font-semibold text-gray-900 mb-3">Trip Details</h3>
                 <div className="space-y-3 text-sm">
                   <div className="flex items-start gap-3">
-                    <div className="w-3 h-3 bg-green-500 rounded-full mt-1 flex-shrink-0"></div>
+                    <div className="w-3 h-3 bg-[#5B2EFF] rounded-full mt-1 flex-shrink-0"></div>
                     <div>
                       <span className="text-gray-500 text-xs">Pickup</span>
                       <p className="text-gray-900 font-medium">{finalPickup}</p>
@@ -644,7 +517,7 @@ export const ConfirmOrder: React.FC<ConfirmOrderProps> = ({
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Discounted fare</span>
-                  <span className="font-medium text-green-600">30% off</span>
+                  <span className="font-medium text-[#5B2EFF]">30% off</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-gray-200">
                   <span className="font-semibold text-gray-900">Total</span>
@@ -669,7 +542,7 @@ export const ConfirmOrder: React.FC<ConfirmOrderProps> = ({
             onClick={handleConfirmOrder}
             disabled={isLoading || isRideActive}
             className={`w-full py-4 rounded-xl font-semibold text-lg shadow-lg transition-colors
-              ${isLoading || isRideActive ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}
+              ${isLoading || isRideActive ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#5B2EFF] text-white hover:bg-[#4A24D9]'}`}
             whileTap={{ scale: 0.98 }}
             whileHover={{ scale: isLoading || isRideActive ? 1 : 1.02 }}
           >

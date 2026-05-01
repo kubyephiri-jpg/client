@@ -4,9 +4,9 @@ import { MapBackground } from '../components/MapBackground';
 import { useFirebaseRide } from '../hooks/useFirebaseRide';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { database, db } from '../config/firebase';
-import { ref, onValue, off } from 'firebase/database';
+import { db } from '../config/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { subscribeToOrder, cancelOrder } from '../services/orderService';
 
 interface WaitingForDriverProps {
   destination: string;
@@ -74,65 +74,38 @@ export const WaitingForDriver: React.FC<WaitingForDriverProps> = ({
     return () => clearInterval(timer);
   }, [isScanning]);
 
-  // Listen to ride/order status changes
+  // Listen to order status changes from unified orders collection
   useEffect(() => {
     if (!orderId) return;
 
-    // For ride orders, check if we should use Firestore
-    if (isRide && useFirestore) {
-      // Listen to Firestore rides collection
-      const rideDocRef = doc(db, 'rides', orderId);
-      
-      const unsubscribe = onSnapshot(rideDocRef, (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          
-          if (data.status === 'accepted') {
-            setIsScanning(false);
-            setTimeout(() => {
-              navigate('/driver-coming', {
-                state: {
-                  orderType: 'ride',
-                  requestId: orderId,
-                  useFirestore: true,
-                  orderData: {
-                    ...orderData,
-                    ...data,
-                    driverId: data.driverId,
-                    driverInfo: data.driverInfo
-                  }
-                }
-              });
-            }, 500);
-          }
-        }
-      });
+    // Subscribe to unified orders collection
+    const unsubscribe = subscribeToOrder(orderId, (order) => {
+      if (!order) return;
 
-      return () => unsubscribe();
-    } else {
-      // Use Realtime Database for other order types or legacy rides
-      const collectionName = isService ? 'serviceRequests' : (isFood ? 'foodOrders' : 'rides');
-      const orderRef = ref(database, `${collectionName}/${orderId}`);
-
-      const unsubscribe = onValue(orderRef, (snapshot) => {
-        const data = snapshot.val();
-        if (data && data.status === 'accepted') {
-          setIsScanning(false);
-          setTimeout(() => {
-            navigate('/driver-coming', {
-              state: {
-                orderType,
-                requestId: orderId,
-                orderData: data
+      // When driver accepts, navigate to driver-coming page
+      if (order.status === 'accepted' || order.status === 'arriving') {
+        setIsScanning(false);
+        setTimeout(() => {
+          navigate('/driver-coming', {
+            state: {
+              orderId,
+              orderType: order.serviceType,
+              orderData: {
+                ...orderData,
+                ...order,
+                pickup: order.pickup?.address,
+                destination: order.dropoff?.address,
+                driverId: order.driver?.id,
+                driverInfo: order.driver
               }
-            });
-          }, 500);
-        }
-      });
+            }
+          });
+        }, 500);
+      }
+    });
 
-      return () => off(orderRef, 'value', unsubscribe);
-    }
-  }, [orderId, orderType, isRide, useFirestore, navigate, orderData]);
+    return () => unsubscribe();
+  }, [orderId, navigate, orderData]);
 
   const handleRequestAgain = async () => {
     if (isLoading) return;
@@ -151,16 +124,14 @@ export const WaitingForDriver: React.FC<WaitingForDriverProps> = ({
 
   const handleConfirmCancel = async () => {
     try {
-      if (isService) {
-        localStorage.removeItem('currentServiceRequestId');
-        localStorage.removeItem('currentOrderType');
-      } else if (isFood) {
-        localStorage.removeItem('currentFoodOrderId');
-        localStorage.removeItem('currentOrderType');
-      } else {
-        localStorage.removeItem('currentRideId');
-        localStorage.removeItem('currentOrderType');
+      // Cancel order via unified service
+      if (orderId) {
+        await cancelOrder(orderId, 'User cancelled while waiting');
       }
+
+      // Clear localStorage
+      localStorage.removeItem('currentOrderId');
+      localStorage.removeItem('currentOrderType');
 
       setShowCancelConfirmation(false);
       navigate('/');
@@ -210,7 +181,7 @@ export const WaitingForDriver: React.FC<WaitingForDriverProps> = ({
             </div>
             <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
               <motion.div
-                className="h-full bg-green-600"
+                className="h-full bg-[#5B2EFF]"
                 initial={{ width: 0 }}
                 animate={{ width: `${progress}%` }}
                 transition={{ duration: 0.5 }}
@@ -265,7 +236,7 @@ export const WaitingForDriver: React.FC<WaitingForDriverProps> = ({
 
                   <motion.button
                     onClick={handleRequestAgain}
-                    className="w-full bg-green-600 text-white py-4 rounded-2xl font-semibold text-lg hover:bg-green-700 mb-3"
+                    className="w-full bg-[#5B2EFF] text-white py-4 rounded-2xl font-semibold text-lg hover:bg-[#4A24D9] mb-3"
                     whileTap={{ scale: 0.98 }}
                   >
                     Try again
